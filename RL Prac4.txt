@@ -1,98 +1,100 @@
-!pip install gymnasium torch matplotlib
+import random
+from deap import base, creator, tools, algorithms
 
-import gymnasium as gym
-import torch
-import torch.nn as nn
-import torch.optim as optim
-import matplotlib.pyplot as plt
-import numpy as np
+# Define the evaluation function
+# Objective: Minimize the sum of squares
+def eval_func(individual):
+    return sum(x ** 2 for x in individual),
 
+# Create fitness class for minimization
+creator.create("FitnessMin", base.Fitness, weights=(-1.0,))
 
-env = gym.make("Pendulum-v1")  
+# Create individual class
+creator.create("Individual", list, fitness=creator.FitnessMin)
 
-state_dim = env.observation_space.shape[0]
-action_dim = env.action_space.shape[0]
+# Create toolbox
+toolbox = base.Toolbox()
 
+# Register attribute generator
+# Random float values between -5 and 5
+toolbox.register("attr_float", random.uniform, -5.0, 5.0)
 
-class Policy(nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.fc = nn.Sequential(
-            nn.Linear(state_dim, 128),
-            nn.ReLU(),
-        )
-        self.mean = nn.Linear(128, action_dim)
-        self.log_std = nn.Parameter(torch.zeros(action_dim))  
+# Register individual generator
+# Each individual has 3 float values
+toolbox.register(
+    "individual",
+    tools.initRepeat,
+    creator.Individual,
+    toolbox.attr_float,
+    n=3
+)
 
-    def forward(self, x):
-        x = self.fc(x)
-        mean = self.mean(x)
-        std = torch.exp(self.log_std)
-        return mean, std
+# Register population generator
+toolbox.register(
+    "population",
+    tools.initRepeat,
+    list,
+    toolbox.individual
+)
 
-policy = Policy()
-optimizer = optim.Adam(policy.parameters(), lr=0.001)
+# Register evaluation function
+toolbox.register("evaluate", eval_func)
 
+# Register crossover operator
+toolbox.register("mate", tools.cxBlend, alpha=0.5)
 
-def train(episodes=100):
-    reward_history = []
+# Register mutation operator
+toolbox.register(
+    "mutate",
+    tools.mutGaussian,
+    mu=0,
+    sigma=1,
+    indpb=0.2
+)
 
-    for ep in range(episodes):
-        state, _ = env.reset()
-        log_probs = []
-        rewards = []
+# Register selection operator
+toolbox.register(
+    "select",
+    tools.selTournament,
+    tournsize=3
+)
 
-        while True:
-            state_tensor = torch.tensor(state, dtype=torch.float32)
-            mean, std = policy(state_tensor)
+# Create initial population
+population = toolbox.population(n=50)
 
-            dist = torch.distributions.Normal(mean, std)
-            action = dist.sample()
-            log_prob = dist.log_prob(action).sum()
+# Number of generations
+generations = 20
 
-            action_clipped = action.detach().numpy()
-            next_state, reward, done, truncated, _ = env.step(action_clipped)
+# Run Genetic Algorithm
+for gen in range(generations):
 
-            log_probs.append(log_prob)
-            rewards.append(reward)
+    # Apply crossover and mutation
+    offspring = algorithms.varAnd(
+        population,
+        toolbox,
+        cxpb=0.5,
+        mutpb=0.1
+    )
 
-            state = next_state
+    # Evaluate offspring fitness
+    fits = toolbox.map(toolbox.evaluate, offspring)
 
-            if done or truncated:
-                break
+    # Assign fitness values
+    for fit, ind in zip(fits, offspring):
+        ind.fitness.values = fit
 
-        
-        returns = []
-        G = 0
-        for r in reversed(rewards):
-            G = r + 0.99 * G
-            returns.insert(0, G)
+    # Select the next generation population
+    population = toolbox.select(
+        offspring,
+        k=len(population)
+    )
 
-        returns = torch.tensor(returns)
-        returns = (returns - returns.mean()) / (returns.std() + 1e-8)
+# Select the best individual
+best_ind = tools.selBest(population, k=1)[0]
 
-        
-        loss = 0
-        for log_prob, G in zip(log_probs, returns):
-            loss += -log_prob * G
+# Get best fitness value
+best_fitness = best_ind.fitness.values[0]
 
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-
-        total_reward = sum(rewards)
-        reward_history.append(total_reward)
-
-        print(f"Episode {ep+1}, Reward: {total_reward:.2f}")
-
-    return reward_history
-
-rewards = train(episodes=100)
-
-
-plt.plot(rewards)
-plt.title("Training Performance (Reward vs Episodes)")
-plt.xlabel("Episodes")
-plt.ylabel("Total Reward")
-plt.grid()
-plt.show()
+# Print results
+print("Best Individual:", best_ind)
+print("Best Fitness:", best_fitness)
